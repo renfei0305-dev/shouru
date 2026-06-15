@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>医养架构极速测算工具(旗舰终极版)</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+        body {
+            -webkit-tap-highlight-color: transparent;
+        }
+        /* 自定义树状图连接线样式 */
+        .tree-line::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 50%;
+            left: -1rem;
+            width: 1rem;
+            border-left: 2px solid #e5e7eb;
+            border-bottom: 2px solid #e5e7eb;
+            border-bottom-left-radius: 0.5rem;
+        }
+        .tree-line-last::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            bottom: 0;
+            left: -1rem;
+            border-left: 2px solid white; 
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 antialiased">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useRef } = React;
+
+        function App() {
+            // 视图模式切换：'list' (列表模式) 或 'tree' (架构预览)
+            const [viewMode, setViewMode] = useState('list');
+
+            const [members, setMembers] = useState([
+                { id: '1', name: '总监A', role: 'director', isExist: true, isHECP: true, upline: '', manualGroupId: '', manualDeptId: '', joinType: 'first', policies: [{ id: 'p1', productType: 'normal', premium: 10, term: 3, rate: 3 }] },
+                { id: '2', name: '经理A', role: 'manager', isExist: false, isHECP: false, upline: '1', manualGroupId: '', manualDeptId: '', joinType: 'first', policies: [{ id: 'p2', productType: 'normal', premium: 10, term: 3, rate: 3 }] },
+                { id: '3', name: '客经A', role: 'agent', isExist: false, isHECP: false, upline: '2', manualGroupId: '', manualDeptId: '', joinType: 'first', policies: [{ id: 'p3', productType: 'hengying', premium: 10, term: 3, rate: 3 }] },
+                { id: '4', name: '客经B', role: 'agent', isExist: false, isHECP: false, upline: '2', manualGroupId: '', manualDeptId: '', joinType: 'secondary', policies: [{ id: 'p4', productType: 'normal', premium: 10, term: 3, rate: 3 }] },
+            ]);
+
+            const [expandedIds, setExpandedIds] = useState(new Set(['1', '2']));
+            const [showAddMenu, setShowAddMenu] = useState(false);
+            
+            // 使用 useRef 记录添加计数，确保任何时候名字唯一（如：总监A、B、C）
+            const nameCounters = useRef({ director: 1, manager: 1, agent: 2 });
+
+            const roleConfig = {
+                director: { label: '总监', color: 'bg-blue-100 text-blue-700 border-blue-200', icon: '🏆' },
+                manager: { label: '经理', color: 'bg-purple-100 text-purple-700 border-purple-200', icon: '💼' },
+                agent: { label: '客经', color: 'bg-green-100 text-green-700 border-green-200', icon: '👤' }
+            };
+
+            const getRankLevel = (role) => {
+                if (role === 'director') return 3;
+                if (role === 'manager') return 2;
+                if (role === 'agent') return 1;
+                return 0;
+            };
+
+            // 转换数字为字母序列 (1->A, 2->B...)
+            const getCharName = (index) => {
+                let result = '';
+                let temp = index;
+                while (temp > 0) {
+                    temp--;
+                    result = String.fromCharCode(65 + (temp % 26)) + result;
+                    temp = Math.floor(temp / 26);
+                }
+                return result;
+            };
+
+            const addMember = (role, isExist) => {
+                const newId = Date.now().toString();
+                const mLevel = getRankLevel(role);
+                // 默认挂在列表中最后一个职级不低于自己的主管名下
+                const defaultUpline = [...members].reverse().find(m => getRankLevel(m.role) >= mLevel)?.id || '';
+                
+                nameCounters.current[role] += 1;
+                const newNamePrefix = role === 'director' ? '总监' : role === 'manager' ? '经理' : '客经';
+                const newName = `${newNamePrefix}${getCharName(nameCounters.current[role])}`;
+                
+                setMembers([...members, {
+                    id: newId,
+                    name: newName,
+                    role: role,
+                    isExist: isExist,
+                    isHECP: false,
+                    upline: defaultUpline,
+                    manualGroupId: '',
+                    manualDeptId: '',
+                    joinType: 'first',
+                    policies: [{ id: Date.now().toString() + '_p', productType: 'normal', premium: 10, term: 3, rate: 3 }]
+                }]);
+                setShowAddMenu(false);
+            };
+
+            const removeMember = (id) => {
+                setMembers(members.filter(m => m.id !== id).map(m => {
+                    let updated = { ...m };
+                    // 级联清理下属的归属关系
+                    if (m.upline === id) updated.upline = '';
+                    if (m.manualGroupId === id) updated.manualGroupId = '';
+                    if (m.manualDeptId === id) updated.manualDeptId = '';
+                    return updated;
+                }));
+            };
+
+            const updateMember = (id, field, value) => {
+                setMembers(members.map(m => m.id === id ? { ...m, [field]: value } : m));
+            };
+
+            // 多保单管理函数
+            const addPolicy = (memberId) => {
+                setMembers(members.map(m => {
+                    if (m.id === memberId) {
+                        return {
+                            ...m,
+                            policies: [...m.policies, { id: Date.now().toString(), productType: 'normal', premium: 10, term: 3, rate: 3 }]
+                        };
+                    }
+                    return m;
+                }));
+            };
+
+            const removePolicy = (memberId, policyId) => {
+                setMembers(members.map(m => {
+                    if (m.id === memberId) {
+                        return { ...m, policies: m.policies.filter(p => p.id !== policyId) };
+                    }
+                    return m;
+                }));
+            };
+
+            const updatePolicy = (memberId, policyId, field, value) => {
+                setMembers(members.map(m => {
+                    if (m.id === memberId) {
+                        return {
+                            ...m,
+                            policies: m.policies.map(p => p.id === policyId ? { ...p, [field]: value } : p)
+                        };
+                    }
+                    return m;
+                }));
+            };
+
+            const toggleExpand = (id) => {
+                const newSet = new Set(expandedIds);
+                if (newSet.has(id)) newSet.delete(id);
+                else newSet.add(id);
+                setExpandedIds(newSet);
+            };
+
+            // 核心结算逻辑
+            const computedData = useMemo(() => {
+                const rawData = members.map(m => {
+                    let pYuan = 0;
+                    let fyc = 0;
+                    let schemePremium = 0;
+                    let hengyingBonus = 0; // 恒盈一生专项补贴
+
+                    // 遍历计算名下所有保单
+                    m.policies.forEach(p => {
+                        const prem = (parseFloat(p.premium) || 0) * 10000;
+                        const r = (parseFloat(p.rate) || 0) / 100;
+                        const t = parseInt(p.term) || 3;
+                        
+                        pYuan += prem;
+                        fyc += prem * r;
+                        
+                        const multiplier = t === 1 ? 0.1 : t === 3 ? 0.6 : 1.0;
+                        schemePremium += prem * multiplier;
+
+                        // 【调整后逻辑】：仅针对恒盈一生产品 3年期 进行2%补贴
+                        if (p.productType === 'hengying' && t === 3) {
+                            hengyingBonus += prem * 0.02; // 2% 奖励
+                        }
+                    });
+
+                    const isNewcomer = !m.isExist || m.joinType === 'secondary';
+
+                    return { ...m, pYuan, fyc, schemePremium, hengyingBonus, isNewcomer };
+                });
+
+                const isValidManpower = (c) => c.fyc >= 3000 || c.isHECP;
+
+                // ============================================
+                // 【孤儿单分配引擎】解析每个人的实际 归属组 和 归属部
+                // ============================================
+                const getAttr = (id, cache = {}, visited = new Set()) => {
+                    if (cache[id]) return cache[id];
+                    if (visited.has(id)) return { groupId: null, deptId: null }; // 防止死循环
+                    visited.add(id);
+
+                    const m = rawData.find(x => x.id === id);
+                    if (!m) return { groupId: null, deptId: null };
+
+                    let gId = null, dId = null;
+                    
+                    if (m.upline) {
+                        const upAttr = getAttr(m.upline, cache, visited);
+                        gId = upAttr.groupId;
+                        dId = upAttr.deptId;
+                    } else {
+                        // 孤儿单手动归属逻辑
+                        gId = m.manualGroupId || null;
+                        if (m.manualDeptId) {
+                            dId = m.manualDeptId;
+                        } else if (gId) {
+                            dId = getAttr(gId, cache, visited).deptId;
+                        } else {
+                            dId = null;
+                        }
+                    }
+
+                    if (m.role === 'manager') gId = m.id;
+                    if (m.role === 'director') {
+                        gId = m.id;
+                        dId = m.id;
+                    }
+
+                    cache[id] = { groupId: gId, deptId: dId };
+                    return cache[id];
+                };
+
+                const attrCache = {};
+                rawData.forEach(m => {
+                    const attr = getAttr(m.id, attrCache);
+                    m.groupId = attr.groupId;
+                    m.deptId = attr.deptId;
+                });
+
+                // 汇总组/部业绩 (基于分配后的归属)
+                rawData.forEach(m => {
+                    if (m.role === 'director' || m.role === 'manager') {
+                        const gMembers = rawData.filter(x => x.groupId === m.id);
+                        m.groupFyc = gMembers.reduce((s, c) => s + c.fyc, 0);
+                        m.groupScheme = gMembers.reduce((s, c) => s + c.schemePremium, 0);
+                        m.validGroupCount = gMembers.filter(c => c.id !== m.id && isValidManpower(c)).length;
+                    } else {
+                        m.groupFyc = 0;
+                        m.groupScheme = 0;
+                        m.validGroupCount = 0;
+                    }
+
+                    if (m.role === 'director') {
+                        const dMembers = rawData.filter(x => x.deptId === m.id);
+                        m.deptFyc = dMembers.reduce((s, c) => s + c.fyc, 0);
+                        m.deptScheme = dMembers.reduce((s, c) => s + c.schemePremium, 0);
+                        m.validDeptCount = dMembers.filter(c => c.id !== m.id && isValidManpower(c)).length;
+                    } else {
+                        m.deptFyc = 0;
+                        m.deptScheme = 0;
+                        m.validDeptCount = 0;
+                    }
+                });
+
+                let totalTeamIncome = 0;
+                let totalTeamPremium = 0;
+
+                const result = rawData.map(m => {
+                    let income = 0;
+                    const details = [];
+                    totalTeamPremium += m.pYuan;
+
+                    // 1. 首年佣金 (FYC) - 汇总多单
+                    if (m.fyc > 0) {
+                        income += m.fyc;
+                        details.push({ name: '首年佣金 (多单汇总)', value: m.fyc });
+                    }
+
+                    // ====== 新增：恒盈一生专项补贴 (多单累加) ======
+                    if (m.hengyingBonus > 0) {
+                        income += m.hengyingBonus;
+                        details.push({ name: '恒盈一生额外补贴', value: m.hengyingBonus, hint: '3年期 2%' });
+                    }
+
+                    // 2. 个人津贴体系 (新人 / 发展 / HECP职业)
+                    if (m.isNewcomer) {
+                        let newbie = 0;
+                        if (m.fyc >= 100000) newbie = 100000;
+                        else if (m.fyc >= 30000) newbie = 30000;
+                        else if (m.fyc >= 10000) newbie = 10000;
+                        else if (m.fyc >= 5000) newbie = 5000;
+                        else if (m.fyc >= 3000) newbie = 3000;
+                        else if (m.fyc >= 2000) newbie = 2000;
+                        
+                        if (newbie > 0) {
+                            income += newbie;
+                            details.push({ name: '新人创业津贴', value: newbie, hint: m.joinType === 'secondary' ? '12号文特批' : '' });
+                        }
+                    } else {
+                        if (m.isHECP) {
+                            let hecpAllow = 0;
+                            if (m.fyc >= 100000) hecpAllow = 100000;
+                            else if (m.fyc >= 30000) hecpAllow = 30000;
+                            else if (m.fyc >= 10000) hecpAllow = 10000;
+                            else if (m.fyc >= 5000) hecpAllow = 5000;
+                            else if (m.fyc >= 3000) hecpAllow = 3000;
+                            
+                            if (hecpAllow > 0) {
+                                income += hecpAllow;
+                                details.push({ name: 'HECP职业津贴', value: hecpAllow, hint: '存量达标专享' });
+                            }
+                        } else {
+                            let devAllow = 0;
+                            if (m.fyc >= 5000) devAllow = 2500;
+                            else if (m.fyc >= 3000) devAllow = 1500;
+                            
+                            if (devAllow > 0) {
+                                income += devAllow;
+                                details.push({ name: '发展津贴', value: devAllow, hint: '存量非HECP专享' });
+                            }
+                        }
+                    }
+
+                    // 3. HECP季度奖 (单月变现逻辑)
+                    if (m.isHECP || m.isNewcomer) {
+                        let qRate = 0;
+                        if (m.fyc >= 100000) qRate = 0.22;
+                        else if (m.fyc >= 30000) qRate = 0.14;
+                        else if (m.fyc >= 10000) qRate = 0.06;
+
+                        if (qRate > 0) {
+                            const qBonus = m.fyc * qRate; 
+                            income += qBonus;
+                            const specialHint = (!m.isHECP && m.isNewcomer) ? '(新人特享)' : '';
+                            const formattedRate = +(qRate * 100).toFixed(1);
+                            details.push({ name: 'HECP季度奖', value: qBonus, hint: `当月达标 ${formattedRate}%${specialHint}` });
+                        }
+                    }
+
+                    // 4. 基本法增员奖 (严格过滤存量客经，但12号文特批除外)
+                    const directChildren = rawData.filter(x => x.upline === m.id);
+                    const validAgents = directChildren.filter(c => c.role === 'agent' && c.fyc >= 3000 && c.isNewcomer);
+                    
+                    if (validAgents.length > 0) {
+                        const recruitBonus = validAgents.length * 2000;
+                        income += recruitBonus;
+                        const hasSecondary = validAgents.some(c => c.joinType === 'secondary');
+                        details.push({ 
+                            name: '基本法增员奖', 
+                            value: recruitBonus, 
+                            hint: `${validAgents.length}名客经达标${hasSecondary ? '(含12号文特批)' : ''}` 
+                        });
+                    }
+
+                    // 5. 2号文推荐人奖励
+                    directChildren.forEach(c => {
+                        if (!c.isNewcomer) return; 
+                        const secHint = c.joinType === 'secondary' ? '(12号文特批)' : '';
+
+                        if (c.role === 'director') {
+                            const dRecBonus = c.deptFyc * 0.10;
+                            if (dRecBonus > 0) {
+                                income += dRecBonus;
+                                details.push({ name: `推荐新总监奖励 (${c.name})`, value: dRecBonus, hint: `部FYC 10%${secHint}` });
+                            }
+                        }
+                        if (c.role === 'manager') {
+                            // 判定推荐人(m)是否为“新总监本人”或“新总监部内的经理”
+                            let inNewDirectorDept = false;
+                            if (m.deptId) {
+                                const deptHead = rawData.find(x => x.id === m.deptId);
+                                if (deptHead && deptHead.role === 'director' && deptHead.isNewcomer) {
+                                    inNewDirectorDept = true;
+                                }
+                            }
+
+                            if (!inNewDirectorDept) {
+                                const mRecBonus = c.groupFyc * 0.10;
+                                if (mRecBonus > 0) {
+                                    income += mRecBonus;
+                                    details.push({ name: `推荐新经理奖励 (${c.name})`, value: mRecBonus, hint: `组FYC 10%${secHint}` });
+                                }
+                            } else {
+                                details.push({ name: `推荐新经理奖励 (${c.name})`, value: 0, hint: '新总监部内推荐归零', isWarning: true });
+                            }
+                        }
+                    });
+
+                    // 6. 主管津贴与红利
+                    if (m.role === 'manager' || m.role === 'director') {
+                        // 组管理津贴
+                        const isManagerHighTier = m.isNewcomer 
+                            ? (m.fyc >= 3000 && m.validGroupCount >= 1) 
+                            : (m.isHECP && m.validGroupCount >= 1);
+                            
+                        let gMgmtRate = 0;
+                        if (m.groupFyc >= 50000) gMgmtRate = isManagerHighTier ? 0.36 : 0.18;
+                        else if (m.groupFyc >= 20000) gMgmtRate = isManagerHighTier ? 0.24 : 0.12;
+                        else if (m.groupFyc >= 6000) gMgmtRate = isManagerHighTier ? 0.16 : 0.08;
+                        
+                        if (gMgmtRate > 0) {
+                            const gMgmt = m.groupFyc * gMgmtRate;
+                            income += gMgmt;
+                            const formattedRate = +(gMgmtRate * 100).toFixed(1);
+                            details.push({ name: '组管理津贴', value: gMgmt, hint: `${isManagerHighTier ? '高档' : '低档'} ${formattedRate}%` });
+                        }
+
+                        // 组年终奖 (单月当月碰档变现)
+                        let gAnnRate = 0;
+                        if (m.groupFyc >= 500000) gAnnRate = 0.08;
+                        else if (m.groupFyc >= 200000) gAnnRate = 0.05;
+                        else if (m.groupFyc >= 60000) gAnnRate = 0.03;
+
+                        if (gAnnRate > 0) {
+                            const gAnnBonus = m.groupFyc * gAnnRate;
+                            income += gAnnBonus;
+                            const formattedRate = +(gAnnRate * 100).toFixed(1);
+                            details.push({ name: '组年终奖', value: gAnnBonus, hint: `当月达标 ${formattedRate}%` });
+                        }
+
+                        // 经理团队创业基金
+                        if (m.isNewcomer) {
+                            if (m.fyc >= 3000 && m.groupScheme > 0) {
+                                const mFund = m.groupScheme * 0.02;
+                                income += mFund;
+                                details.push({ name: '经理创业基金', value: mFund, hint: `组方案保费 2%` });
+                            }
+                        } else if (m.groupScheme > 0) {
+                            details.push({ name: '经理创业基金', value: 0, hint: '存量无此基金', isWarning: true });
+                        }
+
+                        // 组育成奖
+                        const nurturedManagers = directChildren.filter(c => c.role === 'manager');
+                        if (nurturedManagers.length > 0) {
+                            const nBonus = nurturedManagers.reduce((sum, c) => sum + (c.groupFyc * 0.22), 0);
+                            if (nBonus > 0) {
+                                income += nBonus;
+                                details.push({ name: '基本法组育成奖', value: nBonus, hint: '被育成组FYC 22%' });
+                            }
+                        }
+                    }
+
+                    if (m.role === 'director') {
+                        // 部管理津贴
+                        const isDirectorHighTier = m.isNewcomer 
+                            ? (m.fyc >= 3000 && m.validDeptCount >= 2) 
+                            : (m.isHECP && m.validDeptCount >= 2);
+
+                        let dMgmtRate = 0;
+                        if (m.deptFyc >= 100000) dMgmtRate = isDirectorHighTier ? 0.18 : 0.09;
+                        else if (m.deptFyc >= 40000) dMgmtRate = isDirectorHighTier ? 0.14 : 0.07;
+                        else if (m.deptFyc >= 12000) dMgmtRate = isDirectorHighTier ? 0.10 : 0.05;
+
+                        if (dMgmtRate > 0) {
+                            const dMgmt = m.deptFyc * dMgmtRate;
+                            income += dMgmt;
+                            const formattedRate = +(dMgmtRate * 100).toFixed(1);
+                            details.push({ name: '部管理津贴', value: dMgmt, hint: `${isDirectorHighTier ? '高档' : '低档'} ${formattedRate}%` });
+                        }
+
+                        // 部年终奖 (单月碰档变现)
+                        let dAnnRate = 0;
+                        if (m.deptFyc >= 1000000) dAnnRate = 0.04;
+                        else if (m.deptFyc >= 400000) dAnnRate = 0.025;
+                        else if (m.deptFyc >= 120000) dAnnRate = 0.015;
+
+                        if (dAnnRate > 0) {
+                            const dAnnBonus = m.deptFyc * dAnnRate;
+                            income += dAnnBonus;
+                            const formattedRate = +(dAnnRate * 100).toFixed(1);
+                            details.push({ name: '部年终奖', value: dAnnBonus, hint: `当月达标 ${formattedRate}%` });
+                        }
+
+                        // 总监团队创业基金
+                        if (m.isNewcomer) {
+                            let dFund = 0;
+                            if (m.deptScheme >= 300000) dFund = m.deptScheme * 0.06;
+                            else if (m.deptScheme >= 50000) dFund = m.deptScheme * 0.04;
+
+                            if (dFund > 0) {
+                                income += dFund;
+                                details.push({ name: '总监创业基金', value: dFund, hint: dFund === m.deptScheme*0.06 ? '满档 6%' : '起步档 4%' });
+                            }
+                        } else if (m.deptScheme >= 50000) {
+                            details.push({ name: '总监创业基金', value: 0, hint: '存量无此基金', isWarning: true });
+                        }
+                    }
+
+                    totalTeamIncome += income;
+
+                    // 为了显示需要，把 pYuan 和 fyc 转回万元/%的展示概念
+                    const displayPremium = (m.pYuan / 10000).toFixed(1);
+                    const displayRate = m.pYuan > 0 ? ((m.fyc / m.pYuan) * 100).toFixed(1) : 0;
+
+                    return { ...m, displayPremium, displayRate, totalIncome: income, incomeDetails: details };
+                });
+
+                return { 
+                    members: result, 
+                    totalTeamIncome, 
+                    totalTeamPremium,
+                    compRate: totalTeamPremium > 0 ? (totalTeamIncome / totalTeamPremium) * 100 : 0
+                };
+            }, [members]);
+
+            const formatMoney = (val) => {
+                return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(val);
+            };
+
+            // ====== 架构图渲染引擎 ======
+            const TreeView = () => {
+                const roots = computedData.members.filter(m => {
+                    const effectiveUpline = m.upline || (m.role === 'agent' ? m.manualGroupId : m.role === 'manager' ? m.manualDeptId : '');
+                    return !effectiveUpline || !computedData.members.some(x => x.id === effectiveUpline);
+                });
+
+                const renderNode = (node, level = 0, isLast = false) => {
+                    const children = computedData.members.filter(m => {
+                        const effUp = m.upline || (m.role === 'agent' ? m.manualGroupId : m.role === 'manager' ? m.manualDeptId : '');
+                        return effUp === node.id;
+                    });
+
+                    return (
+                        <div key={node.id} className="relative mt-3">
+                            <div className="flex items-center relative">
+                                {level > 0 && <div className="absolute w-4 border-t-2 border-gray-300 top-1/2 -left-4"></div>}
+                                
+                                <div className="bg-white border border-gray-200 shadow-sm rounded-xl p-3 flex-1 flex justify-between items-center z-10 relative hover:border-blue-300 transition-colors">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${roleConfig[node.role].color.split(' ')[0]} bg-opacity-30`}>
+                                            {roleConfig[node.role].icon}
+                                        </div>
+                                        <div>
+                                            <div className="font-bold text-gray-800 text-[15px] flex items-center gap-1.5 mb-0.5">
+                                                {node.name}
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-normal ${roleConfig[node.role].color}`}>
+                                                    {node.isExist ? '存量' : '新引'}{roleConfig[node.role].label}
+                                                </span>
+                                            </div>
+                                            <div className="text-[11px] text-gray-500">
+                                                多单总保费: <span className="font-medium text-gray-700">{node.displayPremium}万</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-[10px] text-gray-400 mb-0.5">当月预估收入</div>
+                                        <div className="text-red-500 font-bold text-lg">
+                                            {formatMoney(node.totalIncome)}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {children.length > 0 && (
+                                <div className="ml-5 border-l-2 border-gray-200 pl-4 relative mt-1 pb-1">
+                                    {children.map((child, idx) => renderNode(child, level + 1, idx === children.length - 1))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                };
+
+                return (
+                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-4">
+                        <div className="flex items-center gap-2 mb-4 border-b border-gray-50 pb-3">
+                            <span className="text-blue-500 font-bold text-lg">📊 团队架构视图</span>
+                            <span className="text-xs text-gray-400">直观展示上下级与孤儿单归属关系</span>
+                        </div>
+                        <div className="pl-2">
+                            {roots.length === 0 ? (
+                                <p className="text-gray-400 text-sm text-center py-6">暂无团队人员，请添加</p>
+                            ) : (
+                                roots.map((root, idx) => renderNode(root, 0, idx === roots.length - 1))
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen font-sans bg-gray-50 pb-32">
+                    {/* 顶部工具栏切换 */}
+                    <div className="bg-gradient-to-r from-blue-700 to-indigo-600 text-white p-4 sm:p-5 shadow-lg rounded-b-2xl mb-4 sticky top-0 z-20">
+                        <div className="flex justify-between items-center max-w-2xl mx-auto">
+                            <div className="flex items-center gap-2">
+                                <span className="text-2xl">🧮</span>
+                                <h1 className="text-lg sm:text-xl font-bold tracking-wide">架构旗舰测算</h1>
+                            </div>
+                            <div className="flex bg-white/20 p-1 rounded-lg">
+                                <button 
+                                    onClick={() => setViewMode('list')}
+                                    className={`px-2 sm:px-3 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-blue-50 hover:bg-white/10'}`}
+                                >
+                                    列表录入
+                                </button>
+                                <button 
+                                    onClick={() => setViewMode('tree')}
+                                    className={`px-2 sm:px-3 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'tree' ? 'bg-white text-blue-600 shadow-sm' : 'text-blue-50 hover:bg-white/10'}`}
+                                >
+                                    架构预览
+                                </button>
+                            </div>
+                        </div>
+                        {viewMode === 'list' && (
+                            <div className="max-w-2xl mx-auto mt-3 flex gap-2 text-xs flex-wrap">
+                                <span className="bg-white/20 px-2 py-1 rounded border border-white/30 flex items-center gap-1">⭐ HECP高档津贴</span>
+                                <span className="bg-white/20 px-2 py-1 rounded border border-white/30 flex items-center gap-1">💰 多单智能聚合计算</span>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="max-w-2xl mx-auto px-4 space-y-4">
+                        {/* 视图渲染区 */}
+                        {viewMode === 'tree' ? (
+                            <TreeView />
+                        ) : (
+                            computedData.members.map((member) => {
+                                const isExpanded = expandedIds.has(member.id);
+                                const roleConf = roleConfig[member.role];
+                                
+                                const mLevel = getRankLevel(member.role);
+                                const availableUplines = members.filter(m => {
+                                    if (m.id === member.id) return false;
+                                    return getRankLevel(m.role) >= mLevel;
+                                });
+
+                                return (
+                                    <div key={member.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden transition-all duration-300">
+                                        <div className="p-4 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
+                                            <div className="flex items-center gap-3">
+                                                <div className={`p-2 rounded-lg ${roleConf.color} bg-opacity-20 text-xl flex items-center justify-center w-10 h-10`}>
+                                                    {roleConf.icon}
+                                                </div>
+                                                <div>
+                                                    <div className="flex items-center">
+                                                        <input 
+                                                            type="text" 
+                                                            value={member.name} 
+                                                            onChange={(e) => updateMember(member.id, 'name', e.target.value)}
+                                                            className="font-bold text-gray-800 bg-transparent border-none p-0 focus:ring-0 text-lg w-20 outline-none"
+                                                        />
+                                                        <button 
+                                                            onClick={() => updateMember(member.id, 'isHECP', !member.isHECP)}
+                                                            className={`text-[10px] px-1.5 py-0.5 rounded border ml-1 font-medium transition-colors ${member.isHECP ? 'bg-amber-100 text-amber-700 border-amber-300 shadow-sm' : 'bg-gray-100 text-gray-400 border-gray-200'}`}
+                                                        >
+                                                            {member.isHECP ? '⭐ HECP' : '点亮HECP'}
+                                                        </button>
+                                                    </div>
+                                                    <div className="mt-0.5">
+                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${roleConf.color}`}>
+                                                            {member.isExist ? '存量' : '新引'}{roleConf.label}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            {members.length > 1 && (
+                                                <button onClick={() => removeMember(member.id)} className="p-2 text-red-400 hover:text-red-600 rounded-full hover:bg-red-50 transition-colors">
+                                                    🗑️
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* 基础配置区 (推荐人/入司类型) */}
+                                        <div className="p-4 grid grid-cols-2 gap-3 border-b border-gray-50">
+                                            <div className="col-span-1">
+                                                <label className="block text-[11px] text-gray-500 mb-1">推荐人 (直接招募)</label>
+                                                <select 
+                                                    value={member.upline} 
+                                                    onChange={(e) => updateMember(member.id, 'upline', e.target.value)}
+                                                    className="w-full bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400 text-sm"
+                                                >
+                                                    <option value="">-- 孤儿单/无推荐 --</option>
+                                                    {availableUplines.map(u => (
+                                                        <option key={u.id} value={u.id}>{u.name} ({roleConfig[u.role].label})</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {!member.isExist ? (
+                                                <div className="col-span-1">
+                                                    <label className="block text-[11px] text-gray-500 mb-1">入司类型</label>
+                                                    <select 
+                                                        value={member.joinType} 
+                                                        onChange={(e) => updateMember(member.id, 'joinType', e.target.value)}
+                                                        className={`w-full border rounded-lg px-2 py-1.5 outline-none focus:border-blue-400 text-sm ${member.joinType === 'secondary' ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-gray-50 border-gray-200 text-gray-700'}`}
+                                                    >
+                                                        <option value="first">首次签约</option>
+                                                        <option value="secondary">二次签约</option>
+                                                    </select>
+                                                </div>
+                                            ) : (
+                                                <div className="col-span-1"></div>
+                                            )}
+
+                                            {/* 孤儿单手动归属 */}
+                                            {member.upline === '' && member.role !== 'director' && (
+                                                <>
+                                                    {member.role === 'agent' && (
+                                                        <div className="col-span-1">
+                                                            <label className="block text-[11px] text-orange-500 font-medium mb-1">归属组 (无推荐人选)</label>
+                                                            <select
+                                                                value={member.manualGroupId || ''}
+                                                                onChange={(e) => updateMember(member.id, 'manualGroupId', e.target.value)}
+                                                                className="w-full bg-orange-50 border border-orange-200 text-orange-700 rounded-lg px-2 py-1.5 outline-none focus:border-orange-400 text-sm"
+                                                            >
+                                                                <option value="">-- 无直辖组 --</option>
+                                                                {members.filter(m => (m.role === 'manager' || m.role === 'director') && m.id !== member.id).map(u => (
+                                                                    <option key={u.id} value={u.id}>{u.name}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                    )}
+                                                    <div className="col-span-1">
+                                                        <label className="block text-[11px] text-orange-500 font-medium mb-1">归属部 (无推荐人选)</label>
+                                                        <select
+                                                            value={member.manualDeptId || ''}
+                                                            onChange={(e) => updateMember(member.id, 'manualDeptId', e.target.value)}
+                                                            className="w-full bg-orange-50 border border-orange-200 text-orange-700 rounded-lg px-2 py-1.5 outline-none focus:border-orange-400 text-sm"
+                                                        >
+                                                            <option value="">-- 无直辖部 --</option>
+                                                            {members.filter(m => m.role === 'director' && m.id !== member.id).map(u => (
+                                                                <option key={u.id} value={u.id}>{u.name}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+
+                                        {/* ====== 多保单录入区 ====== */}
+                                        <div className="p-4 bg-gray-50/30">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-[11px] font-bold text-gray-500">业务保单列表 ({member.policies.length}笔)</span>
+                                                <button 
+                                                    onClick={() => addPolicy(member.id)} 
+                                                    className="text-[10px] text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-1 rounded shadow-sm transition-colors"
+                                                >
+                                                    ➕ 添加单子
+                                                </button>
+                                            </div>
+                                            
+                                            <div className="space-y-2">
+                                                {member.policies.map((p, pIdx) => (
+                                                    <div key={p.id} className="grid grid-cols-12 gap-1 items-end bg-white border border-gray-200 p-2 rounded-lg shadow-sm">
+                                                        <div className="col-span-4 sm:col-span-3">
+                                                            <label className="block text-[9px] text-gray-400 mb-0.5 ml-0.5">产品</label>
+                                                            <select 
+                                                                value={p.productType} 
+                                                                onChange={(e) => updatePolicy(member.id, p.id, 'productType', e.target.value)}
+                                                                className="w-full bg-gray-50 border border-gray-200 rounded px-1 py-1.5 text-xs outline-none focus:border-blue-400"
+                                                            >
+                                                                <option value="normal">常规</option>
+                                                                <option value="hengying">恒盈一生</option>
+                                                            </select>
+                                                        </div>
+                                                        <div className="col-span-3 sm:col-span-3">
+                                                            <label className="block text-[9px] text-gray-400 mb-0.5 ml-0.5">保费(万)</label>
+                                                            <input 
+                                                                type="number" 
+                                                                value={p.premium} 
+                                                                onChange={(e) => updatePolicy(member.id, p.id, 'premium', e.target.value)}
+                                                                className="w-full bg-gray-50 border border-gray-200 rounded px-1 py-1.5 text-xs outline-none focus:border-blue-400"
+                                                                min="0" step="0.1"
+                                                            />
+                                                        </div>
+                                                        <div className="col-span-2 sm:col-span-3">
+                                                            <label className="block text-[9px] text-gray-400 mb-0.5 ml-0.5">年期</label>
+                                                            <select 
+                                                                value={p.term} 
+                                                                onChange={(e) => updatePolicy(member.id, p.id, 'term', e.target.value)}
+                                                                className="w-full bg-gray-50 border border-gray-200 rounded px-1 py-1.5 text-xs outline-none focus:border-blue-400"
+                                                            >
+                                                                <option value="1">趸交</option>
+                                                                <option value="3">3年</option>
+                                                                <option value="5">5年+</option>
+                                                            </select>
+                                                        </div>
+                                                        <div className="col-span-2 sm:col-span-2">
+                                                            <label className="block text-[9px] text-gray-400 mb-0.5 ml-0.5">佣金%</label>
+                                                            <input 
+                                                                type="number" 
+                                                                value={p.rate} 
+                                                                onChange={(e) => updatePolicy(member.id, p.id, 'rate', e.target.value)}
+                                                                className="w-full bg-gray-50 border border-gray-200 rounded px-1 py-1.5 text-xs outline-none focus:border-blue-400"
+                                                                min="0" step="0.1"
+                                                            />
+                                                        </div>
+                                                        <div className="col-span-1 flex justify-center pb-1">
+                                                            {member.policies.length > 1 && (
+                                                                <button onClick={() => removePolicy(member.id, p.id)} className="text-gray-400 hover:text-red-500">
+                                                                    ✖
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-blue-50/40 p-4 border-t border-blue-50">
+                                            <div 
+                                                className="flex justify-between items-center cursor-pointer"
+                                                onClick={() => toggleExpand(member.id)}
+                                            >
+                                                <div>
+                                                    <div className="flex items-center gap-2 mb-0.5">
+                                                        <p className="text-xs text-slate-600 font-semibold">当月预估总收入</p>
+                                                        {member.joinType === 'secondary' && !member.isExist && <span className="text-[10px] bg-orange-100 text-orange-600 px-1 rounded border border-orange-200">12号文特批</span>}
+                                                    </div>
+                                                    <p className="text-xl font-bold text-blue-700">{formatMoney(member.totalIncome)}</p>
+                                                </div>
+                                                <div className="text-xs text-blue-500 flex items-center bg-white px-2 py-1 rounded shadow-sm border border-blue-100">
+                                                    {isExpanded ? '收起明细 ▲' : '明细 ▼'}
+                                                </div>
+                                            </div>
+
+                                            {isExpanded && (
+                                                <div className="mt-3 pt-3 border-t border-blue-100/60 space-y-2">
+                                                    {member.incomeDetails.length === 0 ? (
+                                                        <p className="text-sm text-gray-400 text-center py-2">暂无收入项</p>
+                                                    ) : (
+                                                        member.incomeDetails.map((detail, idx) => (
+                                                            <div key={idx} className="flex justify-between items-center text-sm">
+                                                                <span className={`flex items-center ${detail.isWarning ? 'text-red-400 line-through opacity-70' : 'text-gray-600'}`}>
+                                                                    {detail.name}
+                                                                    {detail.hint && !detail.isWarning && <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 rounded ml-2 border border-blue-100">{detail.hint}</span>}
+                                                                    {detail.isWarning && <span className="text-[10px] bg-red-50 text-red-500 px-1.5 rounded ml-2 no-underline border border-red-100">{detail.hint}</span>}
+                                                                </span>
+                                                                <span className={`font-medium ${detail.isWarning ? 'text-red-400' : 'text-gray-800'}`}>
+                                                                    {detail.isWarning ? '0' : `+${formatMoney(detail.value)}`}
+                                                                </span>
+                                                            </div>
+                                                        ))
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })
+                        )}
+                        
+                        <div className="mt-6 mb-4 px-2">
+                            <div className="bg-gray-100 rounded-xl p-4 text-xs text-gray-500 leading-relaxed border border-gray-200 shadow-inner">
+                                <p className="font-bold text-gray-600 mb-1">📋 测算模型备注说明：</p>
+                                <ul className="list-disc pl-4 space-y-1">
+                                    <li>支持单人录入<span className="text-gray-700">多笔不同产品/费率</span>的保单，系统将自动汇总其名下总折算保费及总FYC进行津贴碰档。</li>
+                                    <li>为直观展现高产出的即时价值，模型设定：当<span className="text-gray-700">单月多单汇总业绩</span>触发“季度奖”或“年终奖”的考核门槛时，直接以当月业绩计入当月预估总收入中。<span className="text-red-500">实际该部分奖金需按完整季度/年度累计考核后于期末发放</span>。</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div className="h-64 w-full flex-shrink-0"></div>
+                    </div>
+
+                    <div className="fixed bottom-0 left-0 w-full bg-white shadow-[0_-10px_30px_rgba(0,0,0,0.08)] rounded-t-3xl border-t border-gray-100 z-50">
+                        <div className="max-w-2xl mx-auto w-full px-4 pt-4 pb-6 md:pb-4 relative">
+                            
+                            {showAddMenu && (
+                                <div className="absolute bottom-full left-4 right-4 mb-2 bg-white rounded-2xl shadow-xl border border-gray-100 p-3 grid grid-cols-2 gap-2 animate-fade-in-up z-50">
+                                    <div className="col-span-2 text-xs text-gray-400 font-bold mb-1 ml-1 text-center">👇 选择要添加的角色</div>
+                                    <button onClick={() => addMember('director', false)} className="bg-blue-50 text-blue-700 py-2.5 rounded-xl text-sm font-semibold hover:bg-blue-100 border border-blue-100">医养总监 (新引)</button>
+                                    <button onClick={() => addMember('director', true)} className="bg-slate-100 text-slate-700 py-2.5 rounded-xl text-sm font-semibold hover:bg-slate-200 border border-slate-200">营销总监 (存量)</button>
+                                    <button onClick={() => addMember('manager', false)} className="bg-purple-50 text-purple-700 py-2.5 rounded-xl text-sm font-semibold hover:bg-purple-100 border border-purple-100">医养经理 (新引)</button>
+                                    <button onClick={() => addMember('manager', true)} className="bg-gray-100 text-gray-700 py-2.5 rounded-xl text-sm font-semibold hover:bg-gray-200 border border-gray-200">营销经理 (存量)</button>
+                                    <button onClick={() => addMember('agent', false)} className="bg-green-50 text-green-700 py-2.5 rounded-xl text-sm font-semibold hover:bg-green-100 border border-green-100">客户经理 (新引)</button>
+                                    <button onClick={() => addMember('agent', true)} className="bg-emerald-50 text-emerald-700 py-2.5 rounded-xl text-sm font-semibold hover:bg-emerald-100 border border-emerald-100">客户经理 (存量)</button>
+                                </div>
+                            )}
+
+                            <div className="flex justify-between items-center mb-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-100">
+                                <div className="text-center flex-1 border-r border-slate-200">
+                                    <p className="text-[11px] text-slate-500 mb-0.5">团队总收入</p>
+                                    <p className="text-lg font-bold text-red-500">{formatMoney(computedData.totalTeamIncome)}</p>
+                                </div>
+                                <div className="text-center flex-1 border-r border-slate-200">
+                                    <p className="text-[11px] text-slate-500 mb-0.5">总规模保费</p>
+                                    <p className="text-sm font-bold text-slate-800 mt-1">{formatMoney(computedData.totalTeamPremium)}</p>
+                                </div>
+                                <div className="text-center flex-1">
+                                    <p className="text-[11px] text-slate-500 mb-0.5">综合收益率</p>
+                                    <p className="text-sm font-bold text-slate-800 mt-1">{computedData.compRate.toFixed(2)}%</p>
+                                </div>
+                            </div>
+
+                            <button 
+                                onClick={() => setShowAddMenu(!showAddMenu)} 
+                                className={`w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-base font-bold shadow-md transition-all ${showAddMenu ? 'bg-gray-800 text-white' : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white'}`}
+                            >
+                                {showAddMenu ? '✖ 取消添加' : '➕ 添加团队成员'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
